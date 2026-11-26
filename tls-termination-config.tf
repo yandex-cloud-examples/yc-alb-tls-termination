@@ -1,3 +1,4 @@
+```hcl
 # Объявление переменных для конфиденциальных параметров
 
 variable "folder_id" {
@@ -30,7 +31,7 @@ locals {
   sa_name          = "ig-sa"
   network_name     = "network-1"
   subnet_name_a    = "subnet-a"
-  subnet_name_b    = "subnet-b"
+  subnet_name_e    = "subnet-e"
   sg_name_balancer = "sg-balancer"
   sg_name_vms      = "sg-vms"
   cert_name        = "imported-cert"
@@ -78,14 +79,14 @@ resource "yandex_vpc_network" "network-1" {
 
 resource "yandex_vpc_subnet" "subnet-a" {
   name           = local.subnet_name_a
-  zone           = "ru-central1-a"
+  zone           = "{{ region-id }}-a"
   v4_cidr_blocks = ["192.168.1.0/24"]
   network_id     = yandex_vpc_network.network-1.id
 }
 
-resource "yandex_vpc_subnet" "subnet-b" {
-  name           = local.subnet_name_b
-  zone           = "ru-central1-b"
+resource "yandex_vpc_subnet" "subnet-e" {
+  name           = local.e
+  zone           = "{{ region-id }}-e"
   v4_cidr_blocks = ["192.168.2.0/24"]
   network_id     = yandex_vpc_network.network-1.id
 }
@@ -95,7 +96,7 @@ resource "yandex_vpc_subnet" "subnet-b" {
 resource "yandex_vpc_address" "stat_address" {
   name = "alb-static-address"
   external_ipv4_address {
-    zone_id = "ru-central1-a"
+    zone_id = "{{ region-id }}-a"
   }
 }
 
@@ -127,12 +128,6 @@ resource "yandex_vpc_security_group" "sg-balancer" {
     port           = 443
   }
 
-  ingress {
-    protocol          = "TCP"
-    description       = "healthchecks"
-    predefined_target = "loadbalancer_healthchecks"
-    port              = 30080
- }
 }
 
 resource "yandex_vpc_security_group" "sg-vms" {
@@ -160,8 +155,8 @@ resource "yandex_cm_certificate" "imported-cert" {
   name    = local.cert_name
 
   self_managed {
-    certificate = "${file("${var.certificate}")}"
-    private_key = "${file("${var.private_key}")}"
+    certificate = file(var.certificate)
+    private_key = file(var.private_key)
   }
 }
 
@@ -174,7 +169,7 @@ resource "yandex_compute_image" "lemp-image" {
 resource "yandex_compute_instance_group" "site-ig" {
   name                = local.site_ig_name
   folder_id           = var.folder_id
-  service_account_id  = "${yandex_iam_service_account.ig-sa.id}"
+  service_account_id  = yandex_iam_service_account.ig-sa.id
   instance_template {
     platform_id = "standard-v2"
     resources {
@@ -192,13 +187,13 @@ resource "yandex_compute_instance_group" "site-ig" {
 
     network_interface {
       network_id         = yandex_vpc_network.network-1.id
-      subnet_ids         = [yandex_vpc_subnet.subnet-a.id,yandex_vpc_subnet.subnet-b.id]
+      subnet_ids         = [yandex_vpc_subnet.subnet-a.id,yandex_vpc_subnet.subnet-e.id]
       security_group_ids = [yandex_vpc_security_group.sg-vms.id]
       nat                = true
     }
 
     metadata = {
-      user-data = "#cloud-config\nusers:\n  - name: ${var.vm_user}\n    groups: sudo\n    shell: /bin/bash\n    sudo: 'ALL=(ALL) NOPASSWD:ALL'\n    ssh-authorized-keys:\n      - ${file("${var.ssh_key_path}")}"
+      user-data = "#cloud-config\nusers:\n  - name: ${var.vm_user}\n    groups: sudo\n    shell: /bin/bash\n    sudo: 'ALL=(ALL) NOPASSWD:ALL'\n    ssh_authorized_keys:\n      - ${file("${var.ssh_key_path}")}"
     }
   }
 
@@ -209,7 +204,7 @@ resource "yandex_compute_instance_group" "site-ig" {
   }
 
   allocation_policy {
-    zones = ["ru-central1-a","ru-central1-b"]
+    zones = ["{{ region-id }}-a","{{ region-id }}-e"]
   }
 
   deploy_policy {
@@ -251,7 +246,7 @@ resource "yandex_alb_http_router" "alb-router" {
 
 resource "yandex_alb_virtual_host" "alb-host" {
   name                    = local.alb_host_name
-  authority               = ["${var.domain}"]
+  authority               = [var.domain]
   http_router_id          = yandex_alb_http_router.alb-router.id
   route {
     name                  = "alb-route"
@@ -273,12 +268,12 @@ resource "yandex_alb_load_balancer" "alb" {
 
   allocation_policy {
     location {
-      zone_id   = "ru-central1-a"
+      zone_id   = "{{ region-id }}-a"
       subnet_id = yandex_vpc_subnet.subnet-a.id
     }
     location {
-      zone_id   = "ru-central1-b"
-      subnet_id = yandex_vpc_subnet.subnet-b.id 
+      zone_id   = "{{ region-id }}-e"
+      subnet_id = yandex_vpc_subnet.subnet-e.id 
     }
   }
 
@@ -318,7 +313,7 @@ resource "yandex_alb_load_balancer" "alb" {
       }
       sni_handler {
         name         = "mysite-sni"
-        server_names = ["${var.domain}"]
+        server_names = [var.domain]
         handler {
           http_handler {
             http_router_id = yandex_alb_http_router.alb-router.id
@@ -347,4 +342,5 @@ resource "yandex_dns_recordset" "alb-record" {
   ttl     = 600
   type    = "A"
   data    = [yandex_alb_load_balancer.alb.listener[0].endpoint[0].address[0].external_ipv4_address[0].address]
+  # description - необязательный параметр, описание ресурсной записи
 }
